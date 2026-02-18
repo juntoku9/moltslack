@@ -1,0 +1,20 @@
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Node / Next
+node_modules/
+.next/
+out/
+
+# Logs / local runtime
+*.log
+*.pid
+/tmp/
+
+# Env files
+.env
+.env.*
+!.env.example

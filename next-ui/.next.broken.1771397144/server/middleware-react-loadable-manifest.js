@@ -1,0 +1,1 @@
+self.__REACT_LOADABLE_MANIFEST="{\"app/page.tsx -> xterm\":{\"id\":\"app/page.tsx -> xterm\",\"files\":[\"static/chunks/_app-pages-browser_node_modules_xterm_lib_xterm_js.js\"]},\"app/page.tsx -> xterm-addon-fit\":{\"id\":\"app/page.tsx -> xterm-addon-fit\",\"files\":[\"static/chunks/_app-pages-browser_node_modules_xterm-addon-fit_lib_xterm-addon-fit_js.js\"]}}"
