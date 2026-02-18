@@ -34,6 +34,7 @@ export default function HomePage() {
   const [showAgentPicker, setShowAgentPicker] = useState(false);
   const [showProjectPicker, setShowProjectPicker] = useState(false);
   const [projectNameInput, setProjectNameInput] = useState('');
+  const [sessionNameInput, setSessionNameInput] = useState('');
   const [browsePath, setBrowsePath] = useState('');
   const [browseParent, setBrowseParent] = useState<string | null>(null);
   const [browseDirs, setBrowseDirs] = useState<DirEntry[]>([]);
@@ -167,6 +168,7 @@ export default function HomePage() {
     }
     setShowAgentPicker(true);
     setShowProjectPicker(false);
+    setSessionNameInput('');
   }
 
   function switchProject(projectId: string) {
@@ -365,7 +367,8 @@ export default function HomePage() {
       return;
     }
     const suffix = Date.now().toString().slice(-4);
-    const title = `${agent === 'claude' ? 'claude' : 'chatgpt'}-${suffix}`;
+    const fallbackTitle = `${agent === 'claude' ? 'claude' : 'chatgpt'}-${suffix}`;
+    const title = sessionNameInput.trim() || fallbackTitle;
     const res = await fetch('/api/chats', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -387,6 +390,7 @@ export default function HomePage() {
     persistChatProjectMap(nextChatProjects);
 
     setShowAgentPicker(false);
+    setSessionNameInput('');
 
     const bootCmd = agent === 'claude' ? 'claude\r' : 'codex\r';
     await fetch(`/api/chats/${d.chat.id}/input`, {
@@ -506,6 +510,15 @@ export default function HomePage() {
           <div className='picker-card'>
             <h2>Start a new terminal</h2>
             <p>Project: {selectedProject.name}</p>
+            <div className='picker-field'>
+              <span>Session name</span>
+              <input
+                value={sessionNameInput}
+                onChange={(e) => setSessionNameInput(e.target.value)}
+                className='picker-input'
+                placeholder='e.g. backend bugfix, auth refactor, stripe webhook'
+              />
+            </div>
             <div className='picker-field'>
               <span>Root folder</span>
               <div className='picker-input-row'>
