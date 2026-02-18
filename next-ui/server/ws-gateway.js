@@ -34,7 +34,7 @@ async function attachSSE(ws, chatId) {
   const ctrl = new AbortController();
   ws._abort = ctrl;
   try {
-    const res = await fetch(`${BACKEND}/api/chats/${chatId}/events?replay=0`, { signal: ctrl.signal });
+    const res = await fetch(`${BACKEND}/api/chats/${chatId}/events?replay=1`, { signal: ctrl.signal });
     if (!res.body) return;
     const decoder = new TextDecoder();
     let buf = '';

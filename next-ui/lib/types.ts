@@ -5,6 +5,7 @@ export type ChatSummary = {
   title: string;
   alive: boolean;
   created_at: number;
+  root_path?: string;
 };
 
 export type ChatMessage = {

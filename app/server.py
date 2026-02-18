@@ -29,6 +29,37 @@ def now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def _resolve_root_path(raw_path: object) -> str:
+    if raw_path is None:
+        return os.getcwd()
+    text = str(raw_path).strip()
+    if not text:
+        return os.getcwd()
+    path = os.path.abspath(os.path.expanduser(text))
+    if not os.path.isdir(path):
+        raise ValueError(f"Invalid root_path: directory does not exist ({path})")
+    return path
+
+
+def _list_directories(raw_path: object) -> dict:
+    path = _resolve_root_path(raw_path)
+    items: List[dict] = []
+    try:
+        for name in os.listdir(path):
+            if name in (".", ".."):
+                continue
+            full = os.path.join(path, name)
+            if os.path.isdir(full):
+                items.append({"name": name, "path": full})
+    except OSError as ex:
+        raise ValueError(f"Cannot list directory ({path}): {ex}") from ex
+    items.sort(key=lambda x: x["name"].lower())
+    parent = os.path.dirname(path.rstrip(os.sep)) or None
+    if parent == path:
+        parent = None
+    return {"path": path, "parent": parent, "dirs": items}
+
+
 def _extract_text(value: object) -> str:
     if value is None:
         return ""
@@ -104,6 +135,7 @@ class Event:
 class ChatSession:
     chat_id: str
     title: str
+    root_path: str
     created_at: int = field(default_factory=now_ms)
     pid: int = 0
     fd: int = -1
@@ -115,6 +147,7 @@ class ChatSession:
     def start(self) -> None:
         pid, fd = pty.fork()
         if pid == 0:
+            os.chdir(self.root_path)
             os.environ["TERM"] = "xterm-256color"
             os.environ["PROMPT"] = "moltslack% "
             os.environ["PS1"] = "moltslack$ "
@@ -179,7 +212,7 @@ class ChatSession:
                     stderr=subprocess.PIPE,
                     text=True,
                     bufsize=1,
-                    cwd=os.getcwd(),
+                    cwd=self.root_path,
                 )
             except FileNotFoundError:
                 self._publish("chat", {"role": "system", "text": f"{provider} CLI not found in PATH.", "provider": provider})
@@ -253,9 +286,10 @@ class SessionStore:
         self.sessions: Dict[str, ChatSession] = {}
         self.lock = threading.Lock()
 
-    def create(self, title: str) -> ChatSession:
+    def create(self, title: str, root_path: Optional[str] = None) -> ChatSession:
         chat_id = str(uuid.uuid4())[:8]
-        session = ChatSession(chat_id=chat_id, title=title.strip() or f"chat-{chat_id}")
+        resolved_root_path = _resolve_root_path(root_path)
+        session = ChatSession(chat_id=chat_id, title=title.strip() or f"chat-{chat_id}", root_path=resolved_root_path)
         session.start()
         with self.lock:
             self.sessions[chat_id] = session
@@ -269,6 +303,7 @@ class SessionStore:
                     "title": s.title,
                     "alive": s.alive,
                     "created_at": s.created_at,
+                    "root_path": s.root_path,
                 }
                 for s in self.sessions.values()
             ]
@@ -310,6 +345,15 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         req_path = parsed.path
         query = parse_qs(parsed.query)
+
+        if req_path == "/api/fs/dirs":
+            raw_path = query.get("path", [os.path.expanduser("~")])[0]
+            try:
+                payload = _list_directories(raw_path)
+                self._send_json(HTTPStatus.OK, payload)
+            except ValueError as ex:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(ex)})
+            return
 
         if req_path == "/":
             self._serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
@@ -368,7 +412,12 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/chats":
             body = self._read_json_body()
             title = str(body.get("title", "")).strip()
-            session = STORE.create(title=title or "New Chat")
+            root_path = body.get("root_path")
+            try:
+                session = STORE.create(title=title or "New Chat", root_path=root_path)
+            except ValueError as ex:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(ex)})
+                return
             self._send_json(
                 HTTPStatus.CREATED,
                 {
@@ -377,6 +426,7 @@ class Handler(BaseHTTPRequestHandler):
                         "title": session.title,
                         "alive": session.alive,
                         "created_at": session.created_at,
+                        "root_path": session.root_path,
                     }
                 },
             )
