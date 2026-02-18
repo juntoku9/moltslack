@@ -81,25 +81,19 @@ body {
 }
 
 .project-add-btn {
-  margin-top: 8px;
+  margin-top: 10px;
   width: 44px;
   height: 44px;
   background: linear-gradient(135deg, #38bdf8, #2563eb);
   color: #eff6ff;
   border: 1px solid rgba(255, 255, 255, 0.28);
   box-shadow: 0 8px 20px rgba(37, 99, 235, 0.35);
+  font-size: 28px;
+  line-height: 1;
 }
 
 .project-add-btn:hover {
   filter: brightness(1.06);
-}
-
-.project-add-caption {
-  margin-top: 4px;
-  font-size: 10px;
-  color: #cbd5e1;
-  text-align: center;
-  line-height: 1.1;
 }
 
 .channel-sidebar {

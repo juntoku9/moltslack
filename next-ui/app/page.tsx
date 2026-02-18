@@ -429,10 +429,9 @@ export default function HomePage() {
             </button>
           ))}
         </div>
-        <button className='project-add-btn' onClick={() => openProjectPicker()} title='Start new project setup' aria-label='Start new project setup'>
-          +P
+        <button className='project-add-btn' onClick={() => openProjectPicker()} title='New project' aria-label='New project'>
+          +
         </button>
-        <span className='project-add-caption'>New Project</span>
       </nav>
 
       <aside className='channel-sidebar'>
