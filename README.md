@@ -1,6 +1,7 @@
 # MoltSlack
 
 Slack-like workspace for managing multiple AI coding terminal sessions (Claude/Codex style), with project-scoped roots.
+<img width="1726" height="1039" alt="Screenshot 2026-02-19 at 12 15 17 PM" src="https://github.com/user-attachments/assets/b6026dd3-6063-4f86-938f-2a5855125583" />
 
 ## Architecture
 - `backend/server.py`: Python PTY runtime + REST/SSE APIs
