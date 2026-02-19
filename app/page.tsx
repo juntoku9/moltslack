@@ -12,6 +12,7 @@ const CHAT_PROJECT_MAP_KEY = 'moltslack.chatProjectMap.v1';
 
 type WSEvent = {
   type: 'event';
+  chatId?: string;
   event: string;
   payload: Record<string, unknown>;
 };
@@ -49,6 +50,9 @@ export default function HomePage() {
 
   const [dragActive, setDragActive] = useState(false);
   const [terminalTextMap, setTerminalTextMap] = useState<Record<string, string>>({});
+  const [chatUnreadMap, setChatUnreadMap] = useState<Record<string, boolean>>({});
+  const [chatBusyUntilMap, setChatBusyUntilMap] = useState<Record<string, number>>({});
+  const [uiNowMs, setUiNowMs] = useState(Date.now());
 
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState('');
@@ -59,7 +63,7 @@ export default function HomePage() {
   const fitRef = useRef<any>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const effectiveSelectedChatIdRef = useRef<string | null>(null);
-  const subscribedChatIdRef = useRef<string | null>(null);
+  const projectChatIdsRef = useRef<string[]>([]);
 
   const selectedProject = useMemo(
     () => projects.find((p) => p.id === selectedProjectId) ?? null,
@@ -144,12 +148,21 @@ export default function HomePage() {
     });
   }
 
-  function subscribeToChat(chatId: string | null) {
+  function pulseChatBusy(chatId: string, ms = 2500) {
+    const until = Date.now() + ms;
+    setChatBusyUntilMap((prev) => ({ ...prev, [chatId]: until }));
+  }
+
+  function subscribeToChat(chatId: string | null, replay = true) {
     if (!chatId || !wsRef.current) return;
     if (wsRef.current.readyState !== WebSocket.OPEN) return;
-    if (subscribedChatIdRef.current === chatId) return;
-    wsRef.current.send(JSON.stringify({ type: 'subscribe', chatId }));
-    subscribedChatIdRef.current = chatId;
+    wsRef.current.send(JSON.stringify({ type: 'subscribe', chatId, replay }));
+  }
+
+  function subscribeToProjectChats(chatIds: string[]) {
+    if (!wsRef.current) return;
+    if (wsRef.current.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({ type: 'subscribeMany', chatIds, replay: false }));
   }
 
   async function loadDirs(path?: string) {
@@ -216,6 +229,16 @@ export default function HomePage() {
 
   useEffect(() => {
     effectiveSelectedChatIdRef.current = effectiveSelectedChatId;
+  }, [effectiveSelectedChatId]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setUiNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!effectiveSelectedChatId) return;
+    setChatUnreadMap((prev) => ({ ...prev, [effectiveSelectedChatId]: false }));
   }, [effectiveSelectedChatId]);
 
   useEffect(() => {
@@ -289,15 +312,14 @@ export default function HomePage() {
   useEffect(() => {
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
-    subscribedChatIdRef.current = null;
 
     ws.onopen = () => {
       setWsConnected(true);
-      subscribeToChat(effectiveSelectedChatIdRef.current);
+      subscribeToProjectChats(projectChatIdsRef.current);
+      subscribeToChat(effectiveSelectedChatIdRef.current, true);
     };
     ws.onclose = () => {
       setWsConnected(false);
-      subscribedChatIdRef.current = null;
     };
     ws.onerror = () => setWsConnected(false);
 
@@ -309,20 +331,31 @@ export default function HomePage() {
         return;
       }
       if (data.type !== 'event') return;
-      if (data.event !== 'output') return;
-      const chunk = String(data.payload.text ?? '');
-      termRef.current?.write(chunk);
-      const chatId = effectiveSelectedChatIdRef.current;
-      if (chatId) appendTerminalChunk(chatId, chunk);
+      const chatId = data.chatId || effectiveSelectedChatIdRef.current;
+      if (!chatId) return;
+
+      if (data.event === 'output') {
+        const chunk = String(data.payload.text ?? '');
+        appendTerminalChunk(chatId, chunk);
+        pulseChatBusy(chatId);
+        if (chatId === effectiveSelectedChatIdRef.current) {
+          termRef.current?.write(chunk);
+        } else {
+          setChatUnreadMap((prev) => ({ ...prev, [chatId]: true }));
+        }
+        return;
+      }
     };
 
     return () => ws.close();
   }, []);
 
   useEffect(() => {
-    if (!effectiveSelectedChatId || !wsRef.current) return;
-    subscribeToChat(effectiveSelectedChatId);
-  }, [effectiveSelectedChatId]);
+    const ids = projectChats.map((c) => c.id).filter((id) => id !== effectiveSelectedChatId);
+    projectChatIdsRef.current = ids;
+    subscribeToProjectChats(ids);
+    subscribeToChat(effectiveSelectedChatId, true);
+  }, [projectChats, effectiveSelectedChatId]);
 
   useEffect(() => {
     if (!effectiveSelectedChatId) return;
@@ -362,8 +395,6 @@ export default function HomePage() {
           body: JSON.stringify({ text: data }),
         }).catch(() => {});
       });
-
-      subscribeToChat(effectiveSelectedChatId);
 
       fetch(`/api/chats/${effectiveSelectedChatId}/resize`, {
         method: 'POST',
@@ -589,6 +620,12 @@ export default function HomePage() {
         <div className='session-list'>
           {projectChats.length === 0 && <div className='session-empty'>No sessions in this project yet.</div>}
           {projectChats.map((c) => (
+            (() => {
+              const isWorking = c.alive && (chatBusyUntilMap[c.id] ?? 0) > uiNowMs;
+              const isUnread = Boolean(chatUnreadMap[c.id]) && c.id !== effectiveSelectedChatId;
+              const statusClass = !c.alive ? 'stopped' : isWorking ? 'working' : 'alive';
+              const statusText = !c.alive ? 'stopped' : isWorking ? 'working' : 'live';
+              return (
             <button
               key={c.id}
               onClick={() => selectChat(c.id)}
@@ -603,10 +640,17 @@ export default function HomePage() {
               </span>
               <div className='session-main'>
                 <span className='session-title'>{c.title}</span>
-                <span className='session-path'>{c.root_path || '(default cwd)'}</span>
-                <span className={`session-status ${c.alive ? 'alive' : ''}`}><span className="status-dot" />{c.alive ? 'live' : 'stopped'}</span>
+                <div className='session-meta-row'>
+                  <span className={`session-status ${statusClass}`}>
+                    <span className='status-dot' />
+                    {statusText}
+                  </span>
+                  {isUnread && <span className='session-unread'>unread</span>}
+                </div>
               </div>
             </button>
+              );
+            })()
           ))}
         </div>
       </aside>

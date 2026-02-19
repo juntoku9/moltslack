@@ -31,11 +31,13 @@ function parseFrame(frame) {
   }
 }
 
-async function attachSSE(ws, chatId) {
+async function attachSSE(ws, chatId, replay = true) {
   const ctrl = new AbortController();
-  ws._abort = ctrl;
+  if (!ws._streams) ws._streams = new Map();
+  ws._streams.set(chatId, { ctrl, replay });
   try {
-    const res = await fetch(`${BACKEND}/api/chats/${chatId}/events?replay=1`, { signal: ctrl.signal });
+    const replayFlag = replay ? '1' : '0';
+    const res = await fetch(`${BACKEND}/api/chats/${chatId}/events?replay=${replayFlag}`, { signal: ctrl.signal });
     if (!res.body) return;
     const decoder = new TextDecoder();
     let buf = '';
@@ -46,17 +48,35 @@ async function attachSSE(ws, chatId) {
       for (const frame of parsed.frames) {
         const evt = parseFrame(frame);
         if (!evt) continue;
-        ws.send(JSON.stringify({ type: 'event', event: evt.event, payload: evt.payload }));
+        ws.send(JSON.stringify({ type: 'event', chatId, event: evt.event, payload: evt.payload }));
       }
     }
   } catch {
     // ignore disconnects
+  } finally {
+    if (ws._streams) ws._streams.delete(chatId);
   }
 }
 
 const wss = new WebSocketServer({ host: HOST, port: PORT, path: '/ws' });
 
 wss.on('connection', (ws) => {
+  ws._streams = new Map();
+
+  function subscribeMany(chatIds, replay = false) {
+    const next = new Set((chatIds || []).filter(Boolean));
+    for (const [existingChatId, stream] of ws._streams.entries()) {
+      if (!next.has(existingChatId)) {
+        stream.ctrl.abort();
+        ws._streams.delete(existingChatId);
+      }
+    }
+    for (const chatId of next) {
+      if (ws._streams.has(chatId)) continue;
+      attachSSE(ws, chatId, replay);
+    }
+  }
+
   ws.on('message', (raw) => {
     let msg;
     try {
@@ -64,15 +84,27 @@ wss.on('connection', (ws) => {
     } catch {
       return;
     }
+    if (msg.type === 'subscribeMany' && Array.isArray(msg.chatIds)) {
+      subscribeMany(msg.chatIds.map(String), Boolean(msg.replay));
+      return;
+    }
     if (msg.type === 'subscribe' && msg.chatId) {
-      if (ws._abort) ws._abort.abort();
-      attachSSE(ws, msg.chatId);
+      const chatId = String(msg.chatId);
+      const existing = ws._streams.get(chatId);
+      if (existing) {
+        existing.ctrl.abort();
+        ws._streams.delete(chatId);
+      }
+      attachSSE(ws, chatId, true);
       return;
     }
   });
 
   ws.on('close', () => {
-    if (ws._abort) ws._abort.abort();
+    for (const [, stream] of ws._streams.entries()) {
+      stream.ctrl.abort();
+    }
+    ws._streams.clear();
   });
 });
 

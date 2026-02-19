@@ -290,12 +290,10 @@ textarea:focus:not(:focus-visible) {
   color: var(--text-primary);
 }
 
-.session-path {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.session-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .session-status {
@@ -320,6 +318,33 @@ textarea:focus:not(:focus-visible) {
 
 .session-status.alive .status-dot {
   background: var(--ok);
+}
+
+.session-status.working {
+  color: #e09f38;
+}
+
+.session-status.working .status-dot {
+  background: #e09f38;
+}
+
+.session-status.stopped {
+  color: var(--text-tertiary);
+}
+
+.session-status.stopped .status-dot {
+  background: var(--text-tertiary);
+}
+
+.session-unread {
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 600;
+  color: #2a4ea7;
+  background: #dce7ff;
+  border: 1px solid #bdd1ff;
+  border-radius: 999px;
+  padding: 3px 7px;
 }
 
 /* ─── Main Pane ─── */
