@@ -2,6 +2,7 @@ const { WebSocketServer } = require('ws');
 
 const BACKEND = process.env.BACKEND_BASE_URL || 'http://127.0.0.1:8080';
 const PORT = Number(process.env.WS_PORT || 8081);
+const HOST = process.env.WS_HOST || '127.0.0.1';
 
 function parseSSEFrames(buffer) {
   const frames = [];
@@ -53,7 +54,7 @@ async function attachSSE(ws, chatId) {
   }
 }
 
-const wss = new WebSocketServer({ port: PORT, path: '/ws' });
+const wss = new WebSocketServer({ host: HOST, port: PORT, path: '/ws' });
 
 wss.on('connection', (ws) => {
   ws.on('message', (raw) => {
@@ -75,4 +76,4 @@ wss.on('connection', (ws) => {
   });
 });
 
-console.log(`WS gateway listening on ws://127.0.0.1:${PORT}/ws`);
+console.log(`WS gateway listening on ws://${HOST}:${PORT}/ws`);

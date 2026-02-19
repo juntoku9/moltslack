@@ -342,9 +342,9 @@ export default function HomePage() {
         fontSize: 14,
         lineHeight: 1.35,
         theme: {
-          background: '#091228',
-          foreground: '#d2f7ef',
-          cursor: '#66e3c4',
+          background: '#0e0e0e',
+          foreground: '#d4d4d4',
+          cursor: '#a0a0a0',
         },
       });
       const fit = new FitAddon();
@@ -604,7 +604,7 @@ export default function HomePage() {
               <div className='session-main'>
                 <span className='session-title'>{c.title}</span>
                 <span className='session-path'>{c.root_path || '(default cwd)'}</span>
-                <span className={`session-status ${c.alive ? 'alive' : ''}`}>{c.alive ? 'live' : 'stopped'}</span>
+                <span className={`session-status ${c.alive ? 'alive' : ''}`}><span className="status-dot" />{c.alive ? 'live' : 'stopped'}</span>
               </div>
             </button>
           ))}
@@ -614,12 +614,12 @@ export default function HomePage() {
       <main className='main-pane'>
         <header className='main-topbar'>
           <div className='top-left'>
-            <strong>{effectiveSelectedChatId || 'No session selected'}</strong>
+            <strong>{selectedChat?.title || effectiveSelectedChatId || 'No session selected'}</strong>
             <span className='top-caption'>Project-scoped terminal sessions.</span>
             <span className={`agent-chip ${AGENT_META[currentAgent].chip}`}>{AGENT_META[currentAgent].label}</span>
             <span className='top-path'>{selectedProject?.rootPath || '(no project selected)'}</span>
           </div>
-          <div className={`ws-pill ${wsConnected ? 'ok' : 'bad'}`}>WS {wsConnected ? 'connected' : 'disconnected'}</div>
+          <div className={`ws-pill ${wsConnected ? 'ok' : 'bad'}`}>{wsConnected ? 'Connected' : 'Disconnected'}</div>
         </header>
 
         <section
@@ -656,7 +656,7 @@ export default function HomePage() {
                 void send();
               }
             }}
-            placeholder='Type shell command/input for this terminal session...'
+            placeholder='Send a command...'
             disabled={!effectiveSelectedChatId}
           />
           <button onClick={() => void send()} disabled={!effectiveSelectedChatId}>Send</button>
@@ -664,27 +664,29 @@ export default function HomePage() {
       </main>
 
       <aside className='meta-sidebar'>
-        <div className='meta-section'>
-          <h3>Session Metadata</h3>
-          <div className='meta-row'><span>ID</span><code>{effectiveSelectedChatId || '-'}</code></div>
-          <div className='meta-row'><span>Project</span><strong>{selectedProject?.name || '-'}</strong></div>
-          <div className='meta-row'><span>Root</span><code className='meta-code'>{selectedProject?.rootPath || '-'}</code></div>
-          <div className='meta-row'><span>Status</span><strong>{selectedChat?.alive ? 'live' : 'stopped'}</strong></div>
-          <div className='meta-row'><span>Created</span><strong>{selectedChat ? new Date(selectedChat.created_at).toLocaleString() : '-'}</strong></div>
-          <div className='meta-row'><span>Output lines</span><strong>{outputLines}</strong></div>
-          <div className='meta-row'><span>Output chars</span><strong>{outputChars}</strong></div>
-        </div>
-
-        <div className='meta-section'>
-          <h3>AI Summary</h3>
-          <div className='summary-controls'>
-            <span className='summary-provider'>Auto: {autoSummaryProvider === 'claude' ? 'Claude' : 'OpenAI Codex'}</span>
-            <button onClick={() => void summarizeHistory()} disabled={!effectiveSelectedChatId || summaryLoading}>
-              {summaryLoading ? 'Summarizing...' : 'Summarize'}
-            </button>
+        <div className='meta-header'>Details</div>
+        <div className='meta-body'>
+          <div className='meta-section'>
+            <h3>Session Metadata</h3>
+            <div className='meta-row'><span>ID</span><code>{effectiveSelectedChatId || '-'}</code></div>
+            <div className='meta-row'><span>Project</span><strong>{selectedProject?.name || '-'}</strong></div>
+            <div className='meta-row'><span>Root</span><code className='meta-code'>{selectedProject?.rootPath || '-'}</code></div>
+            <div className='meta-row'><span>Status</span><strong>{selectedChat?.alive ? 'live' : 'stopped'}</strong></div>
+            <div className='meta-row'><span>Created</span><strong>{selectedChat ? new Date(selectedChat.created_at).toLocaleString() : '-'}</strong></div>
+            <div className='meta-row'><span>Output</span><strong>{outputLines} lines / {outputChars} chars</strong></div>
           </div>
-          {summaryError && <p className='summary-error'>{summaryError}</p>}
-          <div className='summary-box summary-markdown' dangerouslySetInnerHTML={{ __html: renderSummaryMarkdown(summaryText || 'Run summary to capture what happened in this terminal.') }} />
+
+          <div className='meta-section'>
+            <h3>AI Summary</h3>
+            <div className='summary-controls'>
+              <span className='summary-provider'>Auto: {autoSummaryProvider === 'claude' ? 'Claude' : 'OpenAI Codex'}</span>
+              <button onClick={() => void summarizeHistory()} disabled={!effectiveSelectedChatId || summaryLoading}>
+                {summaryLoading ? 'Summarizing...' : 'Summarize'}
+              </button>
+            </div>
+            {summaryError && <p className='summary-error'>{summaryError}</p>}
+            <div className='summary-box summary-markdown' dangerouslySetInnerHTML={{ __html: renderSummaryMarkdown(summaryText || 'Run summary to capture what happened in this terminal.') }} />
+          </div>
         </div>
       </aside>
 

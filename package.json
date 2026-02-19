@@ -3,7 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
-    "dev": "concurrently \"next dev -p 3000\" \"node server/ws-gateway.js\"",
+    "dev": "next dev -H 127.0.0.1 -p 3000",
+    "dev:ws": "node server/ws-gateway.js",
+    "dev:all": "concurrently \"next dev -H 127.0.0.1 -p 3000\" \"node server/ws-gateway.js\"",
     "build": "next build",
     "start": "next start -p 3000"
   },
