@@ -21,6 +21,7 @@ type DirBrowseResponse = { path: string; parent: string | null; dirs: DirEntry[]
 type Project = { id: string; name: string; rootPath: string };
 
 type Agent = 'claude' | 'chatgpt';
+
 const AGENT_META: Record<Agent, { label: string; chip: string; logo: string }> = {
   claude: { label: 'Claude', chip: 'chip-claude', logo: 'https://claude.ai/favicon.ico' },
   chatgpt: { label: 'OpenAI', chip: 'chip-chatgpt', logo: 'https://chatgpt.com/favicon.ico' },
@@ -40,10 +41,18 @@ export default function HomePage() {
   const [browseDirs, setBrowseDirs] = useState<DirEntry[]>([]);
   const [browseLoading, setBrowseLoading] = useState(false);
   const [browseError, setBrowseError] = useState('');
+
   const [chatAgentMap, setChatAgentMap] = useState<Record<string, Agent>>({});
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [chatProjectMap, setChatProjectMap] = useState<Record<string, string>>({});
+
+  const [dragActive, setDragActive] = useState(false);
+  const [terminalTextMap, setTerminalTextMap] = useState<Record<string, string>>({});
+
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState('');
+  const [summaryText, setSummaryText] = useState('');
 
   const termMountRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<any>(null);
@@ -76,6 +85,15 @@ export default function HomePage() {
     () => chats.find((c) => c.id === effectiveSelectedChatId) ?? null,
     [chats, effectiveSelectedChatId],
   );
+
+  const selectedOutputText = useMemo(() => {
+    if (!effectiveSelectedChatId) return '';
+    return terminalTextMap[effectiveSelectedChatId] ?? '';
+  }, [effectiveSelectedChatId, terminalTextMap]);
+
+  const autoSummaryProvider = useMemo<'claude' | 'codex'>(() => {
+    return currentAgent === 'claude' ? 'claude' : 'codex';
+  }, [currentAgent]);
 
   function inferAgentFromTitle(title: string): Agent {
     const t = title.toLowerCase();
@@ -116,6 +134,14 @@ export default function HomePage() {
     try {
       localStorage.setItem(CHAT_PROJECT_MAP_KEY, JSON.stringify(next));
     } catch {}
+  }
+
+  function appendTerminalChunk(chatId: string, chunk: string) {
+    setTerminalTextMap((prev) => {
+      const next = (prev[chatId] ?? '') + chunk;
+      const capped = next.length > 300_000 ? next.slice(-300_000) : next;
+      return { ...prev, [chatId]: capped };
+    });
   }
 
   function subscribeToChat(chatId: string | null) {
@@ -182,8 +208,7 @@ export default function HomePage() {
     if (!name || !browsePath) return;
     const id = `proj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
     const nextProject: Project = { id, name, rootPath: browsePath };
-    const nextProjects = [...projects, nextProject];
-    persistProjects(nextProjects);
+    persistProjects([...projects, nextProject]);
     persistSelectedProject(id);
     setShowProjectPicker(false);
     setProjectNameInput('');
@@ -191,6 +216,11 @@ export default function HomePage() {
 
   useEffect(() => {
     effectiveSelectedChatIdRef.current = effectiveSelectedChatId;
+  }, [effectiveSelectedChatId]);
+
+  useEffect(() => {
+    setSummaryError('');
+    setSummaryText('');
   }, [effectiveSelectedChatId]);
 
   useEffect(() => {
@@ -280,7 +310,10 @@ export default function HomePage() {
       }
       if (data.type !== 'event') return;
       if (data.event !== 'output') return;
-      termRef.current?.write(String(data.payload.text ?? ''));
+      const chunk = String(data.payload.text ?? '');
+      termRef.current?.write(chunk);
+      const chatId = effectiveSelectedChatIdRef.current;
+      if (chatId) appendTerminalChunk(chatId, chunk);
     };
 
     return () => ws.close();
@@ -369,6 +402,7 @@ export default function HomePage() {
     const suffix = Date.now().toString().slice(-4);
     const fallbackTitle = `${agent === 'claude' ? 'claude' : 'chatgpt'}-${suffix}`;
     const title = sessionNameInput.trim() || fallbackTitle;
+
     const res = await fetch('/api/chats', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -379,16 +413,12 @@ export default function HomePage() {
       alert(String(fail?.error ?? 'Failed to create chat'));
       return;
     }
+
     const d = (await res.json()) as { chat: ChatSummary };
     addChat(d.chat);
     selectChat(d.chat.id);
-
-    const nextAgents = { ...chatAgentMap, [d.chat.id]: agent };
-    persistAgentMap(nextAgents);
-
-    const nextChatProjects = { ...chatProjectMap, [d.chat.id]: selectedProject.id };
-    persistChatProjectMap(nextChatProjects);
-
+    persistAgentMap({ ...chatAgentMap, [d.chat.id]: agent });
+    persistChatProjectMap({ ...chatProjectMap, [d.chat.id]: selectedProject.id });
     setShowAgentPicker(false);
     setSessionNameInput('');
 
@@ -415,6 +445,114 @@ export default function HomePage() {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text: '\r' }),
     });
+  }
+
+  function quotePath(path: string): string {
+    return `'${path.replace(/'/g, `'\\''`)}'`;
+  }
+
+  async function handleFileDrop(fileList: FileList | null) {
+    if (!effectiveSelectedChatId || !fileList || fileList.length === 0) return;
+    const form = new FormData();
+    for (const file of Array.from(fileList)) {
+      const withRel = file as File & { webkitRelativePath?: string };
+      form.append('files', file, withRel.webkitRelativePath || file.name);
+    }
+
+    const res = await fetch(`/api/chats/${effectiveSelectedChatId}/upload`, {
+      method: 'POST',
+      body: form,
+    });
+    const data = (await res.json().catch(() => ({}))) as { error?: string; files?: string[] };
+    if (!res.ok) {
+      alert(data.error || 'Failed to upload files');
+      return;
+    }
+
+    const files = (data.files ?? []).map((p) => `./${p}`);
+    if (files.length > 0) {
+      const insertion = files.map(quotePath).join(' ');
+      setInput((prev) => (prev.trim() ? `${prev} ${insertion}` : insertion));
+    }
+  }
+
+  async function summarizeHistory() {
+    if (!effectiveSelectedChatId) return;
+    setSummaryLoading(true);
+    setSummaryError('');
+    try {
+      const res = await fetch(`/api/chats/${effectiveSelectedChatId}/summarize`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: autoSummaryProvider, max_chars: 12000 }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { error?: string; summary?: string };
+      if (!res.ok) {
+        setSummaryError(data.error || 'Failed to summarize');
+        return;
+      }
+      setSummaryText(data.summary || '(No summary returned)');
+    } catch {
+      setSummaryError('Failed to summarize');
+    } finally {
+      setSummaryLoading(false);
+    }
+  }
+
+  const outputChars = selectedOutputText.length;
+  const outputLines = selectedOutputText ? selectedOutputText.split('\n').length : 0;
+
+  function renderSummaryMarkdown(md: string): string {
+    const escaped = md
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+
+    const lines = escaped.split('\n');
+    const out: string[] = [];
+    let inList = false;
+
+    const inline = (s: string) =>
+      s
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        .replace(/`([^`]+)`/g, '<code>$1</code>');
+
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (!line) {
+        if (inList) {
+          out.push('</ul>');
+          inList = false;
+        }
+        continue;
+      }
+      if (line.startsWith('- ')) {
+        if (!inList) {
+          out.push('<ul>');
+          inList = true;
+        }
+        out.push(`<li>${inline(line.slice(2))}</li>`);
+        continue;
+      }
+      if (inList) {
+        out.push('</ul>');
+        inList = false;
+      }
+      if (line.startsWith('### ')) {
+        out.push(`<h3>${inline(line.slice(4))}</h3>`);
+      } else if (line.startsWith('## ')) {
+        out.push(`<h2>${inline(line.slice(3))}</h2>`);
+      } else if (line.startsWith('# ')) {
+        out.push(`<h1>${inline(line.slice(2))}</h1>`);
+      } else if (line.startsWith('> ')) {
+        out.push(`<blockquote>${inline(line.slice(2))}</blockquote>`);
+      } else {
+        out.push(`<p>${inline(line)}</p>`);
+      }
+    }
+    if (inList) out.push('</ul>');
+    return out.join('');
   }
 
   return (
@@ -484,7 +622,27 @@ export default function HomePage() {
           <div className={`ws-pill ${wsConnected ? 'ok' : 'bad'}`}>WS {wsConnected ? 'connected' : 'disconnected'}</div>
         </header>
 
-        <section className='terminal-card'>
+        <section
+          className={`terminal-card ${dragActive ? 'drag-active' : ''}`}
+          onDragEnter={(e) => {
+            e.preventDefault();
+            setDragActive(true);
+          }}
+          onDragOver={(e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+            setDragActive(true);
+          }}
+          onDragLeave={(e) => {
+            e.preventDefault();
+            if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragActive(false);
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragActive(false);
+            void handleFileDrop(e.dataTransfer.files);
+          }}
+        >
           <div ref={termMountRef} className='terminal-host' />
         </section>
 
@@ -504,6 +662,31 @@ export default function HomePage() {
           <button onClick={() => void send()} disabled={!effectiveSelectedChatId}>Send</button>
         </footer>
       </main>
+
+      <aside className='meta-sidebar'>
+        <div className='meta-section'>
+          <h3>Session Metadata</h3>
+          <div className='meta-row'><span>ID</span><code>{effectiveSelectedChatId || '-'}</code></div>
+          <div className='meta-row'><span>Project</span><strong>{selectedProject?.name || '-'}</strong></div>
+          <div className='meta-row'><span>Root</span><code className='meta-code'>{selectedProject?.rootPath || '-'}</code></div>
+          <div className='meta-row'><span>Status</span><strong>{selectedChat?.alive ? 'live' : 'stopped'}</strong></div>
+          <div className='meta-row'><span>Created</span><strong>{selectedChat ? new Date(selectedChat.created_at).toLocaleString() : '-'}</strong></div>
+          <div className='meta-row'><span>Output lines</span><strong>{outputLines}</strong></div>
+          <div className='meta-row'><span>Output chars</span><strong>{outputChars}</strong></div>
+        </div>
+
+        <div className='meta-section'>
+          <h3>AI Summary</h3>
+          <div className='summary-controls'>
+            <span className='summary-provider'>Auto: {autoSummaryProvider === 'claude' ? 'Claude' : 'OpenAI Codex'}</span>
+            <button onClick={() => void summarizeHistory()} disabled={!effectiveSelectedChatId || summaryLoading}>
+              {summaryLoading ? 'Summarizing...' : 'Summarize'}
+            </button>
+          </div>
+          {summaryError && <p className='summary-error'>{summaryError}</p>}
+          <div className='summary-box summary-markdown' dangerouslySetInnerHTML={{ __html: renderSummaryMarkdown(summaryText || 'Run summary to capture what happened in this terminal.') }} />
+        </div>
+      </aside>
 
       {showAgentPicker && selectedProject && (
         <div className='picker-backdrop'>

@@ -12,6 +12,7 @@ import uuid
 import fcntl
 import struct
 import termios
+import cgi
 from urllib.parse import parse_qs, urlparse
 from dataclasses import dataclass, field
 from http import HTTPStatus
@@ -48,6 +49,8 @@ def _list_directories(raw_path: object) -> dict:
         for name in os.listdir(path):
             if name in (".", ".."):
                 continue
+            if name.startswith("."):
+                continue
             full = os.path.join(path, name)
             if os.path.isdir(full):
                 items.append({"name": name, "path": full})
@@ -58,6 +61,14 @@ def _list_directories(raw_path: object) -> dict:
     if parent == path:
         parent = None
     return {"path": path, "parent": parent, "dirs": items}
+
+
+def _safe_join(base_dir: str, rel_path: str) -> str:
+    rel = rel_path.replace("\\", "/").lstrip("/")
+    target = os.path.abspath(os.path.join(base_dir, rel))
+    if os.path.commonpath([os.path.abspath(base_dir), target]) != os.path.abspath(base_dir):
+        raise ValueError(f"Invalid file path: {rel_path}")
+    return target
 
 
 def _extract_text(value: object) -> str:
@@ -123,6 +134,41 @@ def _normalize_provider_line(provider: str, line: str) -> Dict[str, Optional[str
     if thought:
         thought = thought.strip()
     return {"activity": activity, "chat": chat, "thought": thought}
+
+
+def _run_provider_once(provider: str, prompt: str, cwd: str, timeout_sec: int = 60) -> str:
+    cmd = _provider_command(provider, prompt.strip())
+    try:
+        completed = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            timeout=timeout_sec,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"{provider} summarize timed out after {timeout_sec}s.")
+    except FileNotFoundError:
+        raise RuntimeError(f"{provider} CLI not found in PATH.")
+    except Exception as ex:
+        raise RuntimeError(f"Failed to start {provider}: {ex}") from ex
+
+    chats: List[str] = []
+    stderr_lines = [line.strip() for line in completed.stderr.splitlines() if line.strip()]
+    for line in completed.stdout.splitlines():
+        parsed = _normalize_provider_line(provider, line)
+        chat = parsed.get("chat")
+        if chat:
+            chats.append(chat)
+
+    summary = "\n".join([c.strip() for c in chats if c and c.strip()]).strip()
+    if summary:
+        return summary
+    if stderr_lines:
+        raise RuntimeError(stderr_lines[0])
+    if completed.returncode != 0:
+        raise RuntimeError(f"{provider} exited with code {completed.returncode}")
+    raise RuntimeError("No summary returned by provider")
 
 
 @dataclass
@@ -262,6 +308,24 @@ class ChatSession:
             self.listeners.append(q)
         return q
 
+    def recent_transcript(self, max_chars: int = 12000) -> str:
+        rows: List[str] = []
+        with self.lock:
+            events = list(self.history)
+        for evt in events:
+            if evt.kind == "input":
+                text = str(evt.payload.get("text", ""))
+                if text:
+                    rows.append(f"[user_input]\n{text}")
+            elif evt.kind == "output":
+                text = str(evt.payload.get("text", ""))
+                if text:
+                    rows.append(f"[terminal_output]\n{text}")
+        transcript = "\n".join(rows)
+        if len(transcript) > max_chars:
+            transcript = transcript[-max_chars:]
+        return transcript
+
     def unsubscribe(self, q: queue.Queue) -> None:
         with self.lock:
             if q in self.listeners:
@@ -340,6 +404,34 @@ class Handler(BaseHTTPRequestHandler):
             return json.loads(raw.decode("utf-8"))
         except json.JSONDecodeError:
             return {}
+
+    def _read_multipart_form(self) -> tuple[list[tuple[str, bytes]], dict]:
+        content_type = self.headers.get("Content-Type", "")
+        if "multipart/form-data" not in content_type:
+            raise ValueError("Content-Type must be multipart/form-data")
+        form = cgi.FieldStorage(
+            fp=self.rfile,
+            headers=self.headers,
+            environ={
+                "REQUEST_METHOD": "POST",
+                "CONTENT_TYPE": content_type,
+                "CONTENT_LENGTH": self.headers.get("Content-Length", "0"),
+            },
+            keep_blank_values=True,
+        )
+
+        files: list[tuple[str, bytes]] = []
+        fields: dict = {}
+        if not form.list:
+            return files, fields
+
+        for item in form.list:
+            if item.filename:
+                data = item.file.read() if item.file else b""
+                files.append((str(item.filename), data))
+            else:
+                fields[item.name] = item.value
+        return files, fields
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -494,6 +586,98 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(ex)})
             except RuntimeError as ex:
                 self._send_json(HTTPStatus.CONFLICT, {"error": str(ex)})
+            return
+
+        if self.path.startswith("/api/chats/") and self.path.endswith("/upload"):
+            parts = self.path.split("/")
+            if len(parts) < 5:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Bad path"})
+                return
+            chat_id = parts[3]
+            try:
+                session = STORE.get(chat_id)
+            except KeyError:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "Chat not found"})
+                return
+
+            try:
+                files, _fields = self._read_multipart_form()
+            except ValueError as ex:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(ex)})
+                return
+
+            if not files:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "No files uploaded"})
+                return
+
+            saved: List[str] = []
+            for filename, data in files:
+                safe_name = filename.strip() or "upload.bin"
+                try:
+                    target = _safe_join(session.root_path, safe_name)
+                except ValueError as ex:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(ex)})
+                    return
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                with open(target, "wb") as f:
+                    f.write(data)
+                rel = os.path.relpath(target, session.root_path).replace("\\", "/")
+                saved.append(rel)
+                session._publish("output", {"text": f"\r\n[upload] saved ./{rel}\r\n"})
+
+            self._send_json(HTTPStatus.OK, {"ok": True, "files": saved, "count": len(saved)})
+            return
+
+        if self.path.startswith("/api/chats/") and self.path.endswith("/summarize"):
+            parts = self.path.split("/")
+            if len(parts) < 5:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Bad path"})
+                return
+            chat_id = parts[3]
+            body = self._read_json_body()
+            provider = str(body.get("provider", "claude")).strip().lower()
+            try:
+                max_chars = int(body.get("max_chars", 12000))
+            except (TypeError, ValueError):
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid max_chars"})
+                return
+            max_chars = max(1000, min(max_chars, 50000))
+
+            try:
+                session = STORE.get(chat_id)
+            except KeyError:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "Chat not found"})
+                return
+
+            transcript = session.recent_transcript(max_chars=max_chars)
+            if not transcript.strip():
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "No terminal history to summarize"})
+                return
+
+            prompt = (
+                "You are summarizing a coding terminal session for a busy human engineer.\n"
+                "Return ONLY concise markdown bullets in this exact structure:\n"
+                "## Goal\n"
+                "- <one short bullet>\n"
+                "## Progress\n"
+                "- <1 to 3 short bullets>\n"
+                "Rules:\n"
+                "- Keep total output under 80 words.\n"
+                "- No intro, no outro, no extra sections.\n"
+                "- Focus only on concrete actions/state from the transcript.\n\n"
+                "Terminal transcript:\n"
+                f"{transcript}"
+            )
+            try:
+                summary = _run_provider_once(provider=provider, prompt=prompt, cwd=session.root_path)
+            except ValueError as ex:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(ex)})
+                return
+            except RuntimeError as ex:
+                self._send_json(HTTPStatus.CONFLICT, {"error": str(ex)})
+                return
+
+            self._send_json(HTTPStatus.OK, {"ok": True, "provider": provider, "summary": summary})
             return
 
         self._send_json(HTTPStatus.NOT_FOUND, {"error": "Not found"})

@@ -129,9 +129,11 @@ Current product direction: **terminal-first multi-session manager** (chat parsin
 - Added project model in frontend with persistent project list/selection, project-to-chat mapping, and left-rail project switcher.
 - Updated New Terminal flow to always create sessions under selected project root instead of ad-hoc per-session path entry.
 - Session list is now project-scoped, and switching projects switches visible sessions/work context.
+- Added right-side metadata panel with session facts and provider-based terminal history summarization controls.
+- Added backend summarize endpoint (`POST /api/chats/{id}/summarize`) using Claude/Codex CLIs with timeout guard.
 - Why: Claude Code and Codex workflows are project-path centric, so session root must be explicit and selectable at creation.
-- Files touched: `app/server.py`, `next-ui/app/page.tsx`, `next-ui/app/globals.css`, `next-ui/lib/types.ts`, `next-ui/app/api/fs/dirs/route.ts`, `next-ui/server/ws-gateway.js`, `agent.md`.
-- Validation: `python3 -m py_compile app/server.py` passed; `npm run build` passed; `GET /api/fs/dirs` works on backend and Next proxy; API create-chat with selected root path succeeds; frontend restarted cleanly with updated WS bridge and project switcher UI.
+- Files touched: `app/server.py`, `next-ui/app/page.tsx`, `next-ui/app/globals.css`, `next-ui/lib/types.ts`, `next-ui/app/api/fs/dirs/route.ts`, `next-ui/app/api/chats/[chatId]/upload/route.ts`, `next-ui/app/api/chats/[chatId]/summarize/route.ts`, `next-ui/server/ws-gateway.js`, `agent.md`.
+- Validation: `python3 -m py_compile app/server.py` passed; `npm run build` passed; summarize route returns provider validation errors as expected; frontend/backend restarted successfully with metadata sidebar UI.
 - Established terminal-first product direction.
 - Migrated UI architecture to Next.js + xterm.js + WS gateway + Zustand.
 - Implemented Slack-like layout and styling refresh.
