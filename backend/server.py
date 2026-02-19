@@ -17,11 +17,8 @@ from urllib.parse import parse_qs, urlparse
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from typing import Dict, List, Optional
 
-ROOT = Path(__file__).resolve().parent
-STATIC_DIR = ROOT / "static"
 HOST = "127.0.0.1"
 PORT = 8080
 
@@ -447,10 +444,6 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(ex)})
             return
 
-        if req_path == "/":
-            self._serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
-            return
-
         if req_path == "/api/chats":
             self._send_json(HTTPStatus.OK, {"chats": STORE.list()})
             return
@@ -486,17 +479,6 @@ class Handler(BaseHTTPRequestHandler):
             finally:
                 session.unsubscribe(q)
             return
-
-        if self.path.startswith("/static/"):
-            path = STATIC_DIR / self.path.removeprefix("/static/")
-            if path.exists():
-                content_type = "text/plain"
-                if path.suffix == ".css":
-                    content_type = "text/css"
-                if path.suffix == ".js":
-                    content_type = "application/javascript"
-                self._serve_file(path, content_type)
-                return
 
         self._send_json(HTTPStatus.NOT_FOUND, {"error": "Not found"})
 
@@ -681,18 +663,6 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         self._send_json(HTTPStatus.NOT_FOUND, {"error": "Not found"})
-
-    def _serve_file(self, path: Path, content_type: str) -> None:
-        if not path.exists() or not path.is_file():
-            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Not found"})
-            return
-        data = path.read_bytes()
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
-
 
 def main() -> None:
     server = ThreadingHTTPServer((HOST, PORT), Handler)
