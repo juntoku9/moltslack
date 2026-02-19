@@ -19,9 +19,16 @@ type WSEvent = {
 
 type DirEntry = { name: string; path: string };
 type DirBrowseResponse = { path: string; parent: string | null; dirs: DirEntry[]; error?: string };
-type Project = { id: string; name: string; rootPath: string };
+type Project = { id: string; name: string; rootPath: string; icon?: string };
 
 type Agent = 'claude' | 'chatgpt';
+
+const PROJECT_ICONS = [
+  '📁', '🚀', '⚡', '🔥', '💎', '🎯', '🛠', '🧪',
+  '🌐', '📦', '🎨', '🔮', '🧩', '💡', '🏗', '📡',
+  '🤖', '🦾', '🧠', '🔬', '🎲', '🌿', '☁️', '🔒',
+  '📊', '🎵', '🏠', '⭐', '🐳', '🦀', '🐍', '🦊',
+];
 
 const AGENT_META: Record<Agent, { label: string; chip: string; logo: string }> = {
   claude: { label: 'Claude', chip: 'chip-claude', logo: 'https://claude.ai/favicon.ico' },
@@ -36,6 +43,7 @@ export default function HomePage() {
   const [showAgentPicker, setShowAgentPicker] = useState(false);
   const [showProjectPicker, setShowProjectPicker] = useState(false);
   const [projectNameInput, setProjectNameInput] = useState('');
+  const [projectIconInput, setProjectIconInput] = useState('📁');
   const [sessionNameInput, setSessionNameInput] = useState('');
   const [browsePath, setBrowsePath] = useState('');
   const [browseParent, setBrowseParent] = useState<string | null>(null);
@@ -193,6 +201,7 @@ export default function HomePage() {
   function openProjectPicker() {
     setShowProjectPicker(true);
     setShowAgentPicker(false);
+    setProjectIconInput('📁');
     if (selectedProject?.rootPath) {
       void loadDirs(selectedProject.rootPath);
       return;
@@ -220,11 +229,12 @@ export default function HomePage() {
     const name = projectNameInput.trim();
     if (!name || !browsePath) return;
     const id = `proj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-    const nextProject: Project = { id, name, rootPath: browsePath };
+    const nextProject: Project = { id, name, rootPath: browsePath, icon: projectIconInput };
     persistProjects([...projects, nextProject]);
     persistSelectedProject(id);
     setShowProjectPicker(false);
     setProjectNameInput('');
+    setProjectIconInput('📁');
   }
 
   useEffect(() => {
@@ -598,7 +608,7 @@ export default function HomePage() {
               className={`project-rail-btn ${p.id === selectedProjectId ? 'active' : ''}`}
               title={`${p.name} (${p.rootPath})`}
             >
-              {projectInitial(p.name)}
+              {p.icon || projectInitial(p.name)}
             </button>
           ))}
         </div>
@@ -610,7 +620,7 @@ export default function HomePage() {
       <aside className='channel-sidebar'>
         <div className='sidebar-head'>
           <h1>MoltSlack</h1>
-          <p>{selectedProject ? `${selectedProject.name} project` : 'Pick a project to start'}</p>
+          <p>{selectedProject ? `${selectedProject.icon ? selectedProject.icon + ' ' : ''}${selectedProject.name}` : 'Pick a project to start'}</p>
         </div>
 
         <button onClick={() => openAgentPicker()} className='new-session-btn' disabled={!selectedProject}>
@@ -785,12 +795,29 @@ export default function HomePage() {
             <p>All sessions in this project will use the same folder.</p>
             <div className='picker-field'>
               <span>Project name</span>
-              <input
-                value={projectNameInput}
-                onChange={(e) => setProjectNameInput(e.target.value)}
-                className='picker-input'
-                placeholder='My Project'
-              />
+              <div className='picker-name-row'>
+                <button className='icon-preview-btn' title='Selected icon'>{projectIconInput}</button>
+                <input
+                  value={projectNameInput}
+                  onChange={(e) => setProjectNameInput(e.target.value)}
+                  className='picker-input'
+                  placeholder='My Project'
+                />
+              </div>
+            </div>
+            <div className='picker-field'>
+              <span>Icon</span>
+              <div className='icon-grid'>
+                {PROJECT_ICONS.map((icon) => (
+                  <button
+                    key={icon}
+                    className={`icon-grid-btn ${icon === projectIconInput ? 'active' : ''}`}
+                    onClick={() => setProjectIconInput(icon)}
+                  >
+                    {icon}
+                  </button>
+                ))}
+              </div>
             </div>
             <div className='picker-field'>
               <span>Root folder</span>
